@@ -10,3 +10,6 @@ Revision history for Perl extension Data::TemporaryBag.
 
 0.03 Mon Dec  3 22:02:00 2001
 	- Minor fix to pass -w.
+
+0.04 Mon Dec  3 22:26:00 2001
+	- Fixed mistake in 0.03.
