@@ -17,20 +17,20 @@ use constant LENGTH      => 5;
 
 our ($VERSION, $Threshold, $TempPath, $MaxOpen);
 
-$VERSION = '0.07';
+$VERSION = '0.08';
 
 $Threshold = 10; # KB
 $TempPath  = $::ENV{'TEMP'}||$::ENV{'TMP'}||'.';
 $MaxOpen = 10;
 
-my @OpenFiles;
+my %OpenFiles;
 
 sub new {
     my $class = shift;
     my $self = [''];
-
+    
     bless $self, ref($class)||$class;
-
+    
     $self->[LENGTH] = 0;
     $self->add(@_) if @_;
     $self;
@@ -259,8 +259,10 @@ sub _open {
 	my $recent = $self->[RECENTNESS];
 	return $fh if $recent == 1;
 	$self->[RECENTNESS] = 0;
-	for my $obj (grep {$_->[RECENTNESS] <= $recent} @OpenFiles) {
-	    $obj->[RECENTNESS]++;
+	while(my (undef, $obj) = each %OpenFiles) {
+	    if ($obj->[RECENTNESS] <= $recent) {
+		$obj->[RECENTNESS]++;
+	    }
 	}
 	return $fh;
     }
@@ -280,21 +282,23 @@ sub _open {
 	$self->[FILENAME] = $fn;
     }
 
-    for my $obj (@OpenFiles) {
+    while(my (undef, $obj) = each %OpenFiles) {
 	++$obj->[RECENTNESS];
     }
     
-    if (@OpenFiles >= $MaxOpen) {
-	for my $obj (@OpenFiles) {
+    if (keys %OpenFiles >= $MaxOpen) {
+	my $to_close;
+	while(my (undef, $obj) = each %OpenFiles) {
 	    if ($obj->[RECENTNESS] > $MaxOpen) {
-		$obj->_close;
+		$to_close = $obj;
 		last;
 	    }
 	}
+	$to_close->_close;
     }
 
     $self->[RECENTNESS] = 1;
-    push @OpenFiles, $self;
+    $OpenFiles{overload::StrVal($self)} = $self;
     return $fh;
 }
 
@@ -304,15 +308,12 @@ sub _close {
     my $fh = $self->[FILEHANDLE];
     my $i;
 
-    for ($i = 0; $i < @OpenFiles; $i++) {
-	last if $self eq $OpenFiles[$i];
-    }
-    for (; $i < $#OpenFiles; $i++) {
-	$OpenFiles[$i] = $OpenFiles[$i+1];
-    }
-    --$#OpenFiles;
-    for my $obj (grep {$_->[RECENTNESS] > $recent} @OpenFiles) {
-	--$obj->[RECENTNESS];
+    delete $OpenFiles{overload::StrVal($self)};
+
+    while(my (undef, $obj) = each %OpenFiles) {
+	if (defined $obj and $obj->[RECENTNESS] > $recent) {
+	    $obj->[RECENTNESS]--;
+	}
     }
     $self->_set_fingerprint;
     undef $self->[FILEHANDLE];
@@ -367,6 +368,8 @@ sub DESTROY {
     $self->_close if defined $self->[FILEHANDLE];
     unlink $self->[FILENAME] if defined $self->[FILENAME];
 }
+
+
 
 1;
 __END__

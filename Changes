@@ -1,5 +1,8 @@
 Revision history for Perl extension Data::TemporaryBag.
 
+0.08 Thu Jan 29 00:15:00 2004
+	- Segmentation fault occurred under a certain condition. Fixed.
+
 0.07 Mon Dec 15 22:45:00 2003
 	- Changed an implementation of length method.
 	- Removed some warnings.
@@ -20,7 +23,7 @@ Revision history for Perl extension Data::TemporaryBag.
 0.02 Tue Nov 27 17:17:47 2001
         - The new object didn't initialize properly - fixed.
 
-0.01  Wed Oct 31 22:55:57 2001
+0.01 Wed Oct 31 22:55:57 2001
 	- original version; created by h2xs 1.20 with options
 		-A -X -n Data::TemporaryBag
 
