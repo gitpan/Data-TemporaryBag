@@ -13,10 +13,11 @@ use constant FILEHANDLE  => 2;
 use constant STARTPOS    => 3;
 use constant RECENTNESS  => 4;
 use constant FINGERPRINT => 4;
+use constant LENGTH      => 5;
 
 our ($VERSION, $Threshold, $TempPath, $MaxOpen);
 
-$VERSION = '0.06';
+$VERSION = '0.07';
 
 $Threshold = 10; # KB
 $TempPath  = $::ENV{'TEMP'}||$::ENV{'TMP'}||'.';
@@ -30,11 +31,19 @@ sub new {
 
     bless $self, ref($class)||$class;
 
+    $self->[LENGTH] = 0;
     $self->add(@_) if @_;
     $self;
 }
 
 sub clear {
+    my $self = $_[0];
+
+    &_clear_buffer;
+    $self->[LENGTH] = 0;
+}
+
+sub _clear_buffer {
     my $self = shift;
     my $fn = $self->[FILENAME];
 
@@ -51,13 +60,14 @@ sub add {
     my $buf = \$$self[BUFFER];
 
     $data = '' unless defined $data;
+    $self->[LENGTH] += CORE::length($data);
 
     if ($self->[FILENAME]) {
 	my $fh = $self->_open;
 	seek $fh, 0, SEEK_END;
 	print $fh $data;
     } else {
-	if (length($data) + length($$buf) > $Threshold * 1024) {
+	if (CORE::length($data) + CORE::length($$buf) > $Threshold * 1024) {
 	    my $fh = $self->_open;
 	    seek $fh, 0, SEEK_END;
 	    print $fh $$buf, $data;
@@ -70,7 +80,7 @@ sub add {
 
 sub substr {
     my ($self, $pos, $size, $replace) = @_;
-    my $len = $self->length;
+    my $len = $self->[LENGTH];
    
     $pos  = $len + $pos  if $pos  < 0;
     if (not defined $size or $size+$pos > $len) {
@@ -78,6 +88,9 @@ sub substr {
     } elsif ($size < 0) { 
 	$size = $len + $size;
     }
+    my $rsize = defined($replace) ? CORE::length($replace) : 0;
+    my $offset = $size - $rsize;
+    my $newlen = $len - $offset;
 
     if ($self->[FILENAME]) {
 	my $data;
@@ -88,20 +101,19 @@ sub substr {
 	seek($fh, $startpos+$pos, SEEK_SET);
 	read($fh, $data, $size);
 	if (defined $replace) {
-	    my $rsize = length($replace);
-	    my $newlen = $len - $size + $rsize;
 
-	    if ($rsize == $size) {
+	    if ($offset == 0) {
 		my $fh = $self->_open;
 		seek($fh, $pos + $startpos, SEEK_SET);
 		print $fh $replace;
 	    } elsif ($newlen < $Threshold * 800) {
 		my $data1 = $self->substr(0, $pos);
 		my $data2 = $self->substr($pos + $size);
-		$self->clear;
+		$self->_clear_buffer;
 		$self->[BUFFER] = $data1.$replace.$data2;
-	    } elsif ($pos == 0 and $startpos+$size >= $rsize) {
-		$self->[STARTPOS] += $size-$rsize;
+		$self->[LENGTH] = $newlen;
+	    } elsif ($pos == 0 and $startpos >= -$offset) {
+		$self->[STARTPOS] += $offset;
 		if ($rsize>0) {
 		    seek($fh, $self->[STARTPOS], SEEK_SET);
 		    print $fh $replace;
@@ -110,8 +122,7 @@ sub substr {
 		seek($fh, $startpos+$pos, SEEK_SET);
 		print $fh $replace;
 		truncate($fh, $startpos+$newlen) if $newlen<$len;
-	    } elsif ($rsize < $size) {
-		my $offset = $size-$rsize;	
+	    } elsif ($offset > 0) {
 		my ($data, $pos2);
 
 		if ($pos < $len - $pos - $size) {
@@ -141,12 +152,16 @@ sub substr {
 		    print $fh $replace;
 		}
 	    }
+	    $self->[LENGTH] = $newlen;
 	}
 	return $data;
     } else {
-	return defined $replace ? 
-	    substr($self->[BUFFER], $pos, $size, $replace) :
+	if (defined $replace) {
+	    $self->[LENGTH] = $newlen;
+	    substr($self->[BUFFER], $pos, $size, $replace);
+	} else {
 	    substr($self->[BUFFER], $pos, $size);
+	}
     }
 }
 
@@ -185,7 +200,7 @@ sub _blktf_bw {
 
 sub clone {
     my ($self, $stream)=@_;
-    my $size = $self->length;
+    my $size = $self->[LENGTH];
     my $pos = 0;
     my $new = $self->new;
 
@@ -193,6 +208,7 @@ sub clone {
 	$new->add($self->substr($pos, 1024));
 	$pos += 1024;
     }
+    $new->[LENGTH] = $size;
     $new;
 }
 
@@ -210,6 +226,10 @@ sub value {
 }
 
 sub length {
+    shift->[LENGTH];
+
+=pod
+
     my $self = shift;
     my $fn = $self->[FILENAME];
     my $fh = $self->[FILEHANDLE];
@@ -222,6 +242,9 @@ sub length {
     } else {
 	return length($self->[BUFFER]);
     }
+
+=cut
+
 }
 
 sub defined {
@@ -340,7 +363,8 @@ sub _check_fingerprint {
 
 sub DESTROY {
     my $self = shift;
-    close $self->[FILEHANDLE] if defined $self->[FILEHANDLE];
+#    close $self->[FILEHANDLE] if defined $self->[FILEHANDLE];
+    $self->_close if defined $self->[FILEHANDLE];
     unlink $self->[FILENAME] if defined $self->[FILENAME];
 }
 

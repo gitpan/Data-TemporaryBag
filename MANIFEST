@@ -4,3 +4,4 @@ MANIFEST
 TemporaryBag.pm
 test.pl
 README
+META.yml                                 Module meta-data (added by MakeMaker)
