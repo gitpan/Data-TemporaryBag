@@ -16,7 +16,7 @@ use constant FINGERPRINT => 4;
 
 our ($VERSION, $Threshold, $TempPath, $MaxOpen);
 
-$VERSION = '0.05';
+$VERSION = '0.06';
 
 $Threshold = 10; # KB
 $TempPath  = $::ENV{'TEMP'}||$::ENV{'TMP'}||'.';
@@ -340,8 +340,8 @@ sub _check_fingerprint {
 
 sub DESTROY {
     my $self = shift;
-    close $self->[FILEHANDLE] if $self->[FILEHANDLE];
-    unlink $self->[FILENAME];
+    close $self->[FILEHANDLE] if defined $self->[FILEHANDLE];
+    unlink $self->[FILENAME] if defined $self->[FILENAME];
 }
 
 1;

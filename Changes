@@ -17,3 +17,6 @@ Revision history for Perl extension Data::TemporaryBag.
 0.05 Thu Oct 17 01:18:00 2002
 	- Added a manager of opened temporary files.
 	- Rewrote substr method.
+
+0.06 Sun Nov 11 00:00:00 2002
+	- Minor fix to pass -w.
