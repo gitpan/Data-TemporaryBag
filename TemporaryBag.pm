@@ -13,7 +13,7 @@ use constant FINGERPRINT => 2;
 
 use vars qw/$VERSION $Threshold $TempPath %TempFiles/;
 
-$VERSION = '0.02';
+$VERSION = '0.03';
 
 $Threshold = 10; # KB
 $TempPath  = $::ENV{'TEMP'}||$::ENV{'TMP'}||'./';
@@ -44,6 +44,8 @@ sub clear {
 
 sub add {
     my ($self, $data) = @_;
+
+    $data ||= '';
 
     if (ref($$self)) {
 	my $fh = $self->_open(O_WRONLY|O_APPEND);

@@ -7,3 +7,6 @@ Revision history for Perl extension Data::TemporaryBag.
 
 0.02 Tue Nov 27 17:17:47 2001
         - The new object didn't initialize properly - fixed.
+
+0.03 Mon Dec  3 22:02:00 2001
+	- Minor fix to pass -w.
