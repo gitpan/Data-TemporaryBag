@@ -1,0 +1,9 @@
+Revision history for Perl extension Data::TemporaryBag.
+
+0.01  Wed Oct 31 22:55:57 2001
+	- original version; created by h2xs 1.20 with options
+		-A -X -n Data::TemporaryBag
+
+
+0.02 Tue Nov 27 17:17:47 2001
+        - The new object didn't initialize properly - fixed.
