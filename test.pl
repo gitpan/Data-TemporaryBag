@@ -17,7 +17,6 @@ print "ok 1\n";
 # Insert your test code below (better if it prints "ok 13"
 # (correspondingly "not ok 13") depending on the success of chunk 13
 # of the test code):
-
 my $t = Data::TemporaryBag->new("ABC");
 print "not " if $t->substr(0) ne "ABC";
 print "ok 2\n";
@@ -27,33 +26,28 @@ print "ok 3\n";
 $t->substr(5,1,'123');
 print "not " if $t->value ne "ABCDE123";
 print "ok 4\n";
-$Data::TemporaryBag::Threshold = 0.02;  # Threshold: 20.48 bytes
-$t->add('456789012345');
-print "not " if $t->is_saved;
-print "ok 5\n";
-$t->add('6');
+$t->add('4567890');
+$t->add('1234567890' x 100) for (1..200);
 print "not " unless $t->is_saved;
-print "ok 6\n";
+print "ok 5\n";
 $t->substr(5,1,'XYZ');
-print "not " if $t->value ne "ABCDEXYZ234567890123456";
+print "not " if $t->substr(0, 10) ne "ABCDEXYZ23";
 print "ok 7\n";
-$t->substr(5,12,'abc');
-print "not " if $t->is_saved;
+$t->substr(5,4,'abc');
+$t->substr(0,4,'');
+$t->substr(0,0,'def');
+$t->substr(-3,5,'QWERT');
+print "not " if $t->substr(0,10) ne "defEabc345" or $t->substr(-10) ne "34567QWERT";
 print "ok 8\n";
-print "not " if $t->value ne "ABCDEabc123456";
+$Data::TemporaryBag::MaxOpen = 2;  # keep open 2 files.
+my %t = map {$_, Data::TemporaryBag->new($_ x 10)} ('A'..'C');
+for (1..200) {
+    $t{$_}->add(lc($_) x 50) for ('A'..'C');
+    $t{$_}->add($_ x 50) for ('A'..'C');
+}
+print "not " if grep {$t{$_}->substr(500,10) ne $_ x 10} ('A'..'C');
 print "ok 9\n";
-$t->add('OPQRSTUVWXYZ');
-#sleep 3;
-my $fn = $t->is_saved;
-eval {
- # Tempfile can't be changed by improper method...
-    local *F;
-    open(F, ">> $fn") or die; # so, error should occur here or...
-    print F "@";
-    close F;
-    $t->value;                # ... here.
-};
-print "not " unless $@;
+$t->add('XYZ');
+print "not " if $t->substr(-5) ne "RTXYZ" or $t{B}->substr(500,5) ne 'BBBBB';
 print "ok 10\n";
-unlink $fn;
 

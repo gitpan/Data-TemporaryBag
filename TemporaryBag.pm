@@ -2,28 +2,32 @@ package Data::TemporaryBag;
 
 use strict;
 
-use Fcntl;
-use IO::File;
+use Fcntl qw/:DEFAULT :seek/;
 use Carp;
+use File::Temp ':mktemp';
 
 use overload '""' => \&value, '.=' => \&add, '=' => \&clone, fallback => 1;
-use constant FILENAME => 0;
-use constant STARTPOS => 1;
-use constant FINGERPRINT => 2;
+use constant BUFFER      => 0;
+use constant FILENAME    => 1;
+use constant FILEHANDLE  => 2;
+use constant STARTPOS    => 3;
+use constant RECENTNESS  => 4;
+use constant FINGERPRINT => 4;
 
-use vars qw/$VERSION $Threshold $TempPath %TempFiles/;
+our ($VERSION, $Threshold, $TempPath, $MaxOpen);
 
-$VERSION = '0.04';
+$VERSION = '0.05';
 
 $Threshold = 10; # KB
-$TempPath  = $::ENV{'TEMP'}||$::ENV{'TMP'}||'./';
-%TempFiles = ();
+$TempPath  = $::ENV{'TEMP'}||$::ENV{'TMP'}||'.';
+$MaxOpen = 10;
+
+my @OpenFiles;
 
 sub new {
     my $class = shift;
-    my $self;
+    my $self = [''];
 
-    $$self = '';
     bless $self, ref($class)||$class;
 
     $self->add(@_) if @_;
@@ -32,36 +36,33 @@ sub new {
 
 sub clear {
     my $self = shift;
-    my $fn = $self->is_saved;
+    my $fn = $self->[FILENAME];
 
     if ($fn) {
-	unlink $fn;
-	delete $TempFiles{$fn};
-    } else {
-	$$self = '';
+	$self->_close if $self->[FILEHANDLE];
+	unlink $fn; 
+	@{$self}[FILENAME..FINGERPRINT] = ();
     }
+    $self->[BUFFER] = '';
 }
 
 sub add {
     my ($self, $data) = @_;
+    my $buf = \$$self[BUFFER];
 
     $data = '' unless defined $data;
 
-    if (ref($$self)) {
-	my $fh = $self->_open(O_WRONLY|O_APPEND);
+    if ($self->[FILENAME]) {
+	my $fh = $self->_open;
+	seek $fh, 0, SEEK_END;
 	print $fh $data;
-	close $fh;
-	$self->_set_fingerprint;
     } else {
-	$data = ($$self or '') . $data;
-	if (length($data) > $Threshold * 1024) {
-	    $$self = [_new_filename(), 0];
-	    my $fh = $self->_open(O_CREAT|O_EXCL|O_WRONLY|O_APPEND);
-	    print $fh $data;
-	    close $fh;
-	    $self->_set_fingerprint;
+	if (length($data) + length($$buf) > $Threshold * 1024) {
+	    my $fh = $self->_open;
+	    seek $fh, 0, SEEK_END;
+	    print $fh $$buf, $data;
 	} else {
-	    $$self = $data;
+	    $$buf .= $data;
 	}
     }
     $self;
@@ -71,91 +72,120 @@ sub substr {
     my ($self, $pos, $size, $replace) = @_;
     my $len = $self->length;
    
-    unless (defined $size) {
-	$size = $len;
+    $pos  = $len + $pos  if $pos  < 0;
+    if (not defined $size or $size+$pos > $len) {
+	$size = $len - $pos;
     } elsif ($size < 0) { 
 	$size = $len + $size;
     }
-    $pos  = $len + $pos  if $pos  < 0;
 
-    if ($self->is_saved) {
+    if ($self->[FILENAME]) {
 	my $data;
-	my $fh = $self->_open(O_RDONLY);
+	my $fh = $self->_open;
+	my $startpos = $self->[STARTPOS];
 
 	return '' if $pos >= $len;
-	seek($fh, $pos + $$self->[STARTPOS], 0);
+	seek($fh, $startpos+$pos, SEEK_SET);
 	read($fh, $data, $size);
-	close $fh;
 	if (defined $replace) {
-	    my $rlen = length($replace);
-	    my $newlen = $len - $size + $rlen;
+	    my $rsize = length($replace);
+	    my $newlen = $len - $size + $rsize;
 
-	    if ($rlen == $size) {
-		my $fh = $self->_open(O_RDWR);
-		seek($fh, $pos + $$self->[STARTPOS], 0);
+	    if ($rsize == $size) {
+		my $fh = $self->_open;
+		seek($fh, $pos + $startpos, SEEK_SET);
 		print $fh $replace;
-		close $fh;
 	    } elsif ($newlen < $Threshold * 800) {
 		my $data1 = $self->substr(0, $pos);
 		my $data2 = $self->substr($pos + $size);
 		$self->clear;
-		$$self = $data1.$replace.$data2;
-	    } elsif ($pos == 0 and $replace eq '') {
-		$$self->[STARTPOS] += $size;
-	    } elsif ($pos < 1024 and $newlen < $len + $$self->[STARTPOS]) {
-		my $data;
-		my $fh = $self->_open(O_RDWR);
-		seek($fh, $$self->[STARTPOS], 0);
-		read($fh, $data, $pos);
-		$$self->[STARTPOS] += $len-$newlen;
-		seek($fh, $$self->[STARTPOS], 0);
-		print $fh  $data, $replace;
-		close $fh;
-	    } elsif ($pos + $size + 1024 >= $len) {
-		my $data = '';
-		my $fh = $self->_open(O_RDWR);
-		if ($pos + $size < $len) {
-		    seek($fh, $pos + $size + $$self->[STARTPOS], 0);
-		    read($fh, $data, 1024);
+		$self->[BUFFER] = $data1.$replace.$data2;
+	    } elsif ($pos == 0 and $startpos+$size >= $rsize) {
+		$self->[STARTPOS] += $size-$rsize;
+		if ($rsize>0) {
+		    seek($fh, $self->[STARTPOS], SEEK_SET);
+		    print $fh $replace;
 		}
-		seek ($fh, $pos + $$self->[STARTPOS], 0);
-		print $fh  $replace, $data;
-		truncate($fh, $newlen + $$self->[STARTPOS]);
-		close $fh;
-	    } else {
-		my $t = Data::TemporaryBag->new;
-		my $readpos = 0;
-		while ($readpos < $pos-1024) {
-		    $t->add($self->substr($readpos, 1024));
-		    $readpos +=1024;
-		}
-		$t->add($self->substr($readpos, $pos-$readpos));
-		$t->add($replace);
-		$readpos = $pos + $size;
-		while ($readpos < $len-1024) {
-		    $t->add($self->substr($readpos, 1024));
-		    $readpos +=1024;
-		}
-		$t->add($self->substr($readpos, $len-$readpos));
-		$self->clear;
-		$$self = $$t;
-		$$t = '';
-	    }
+	    } elsif ($pos+$size == $len) {
+		seek($fh, $startpos+$pos, SEEK_SET);
+		print $fh $replace;
+		truncate($fh, $startpos+$newlen) if $newlen<$len;
+	    } elsif ($rsize < $size) {
+		my $offset = $size-$rsize;	
+		my ($data, $pos2);
 
+		if ($pos < $len - $pos - $size) {
+		    seek($fh, $startpos+$pos+$offset, SEEK_SET);
+		    print $fh $replace;
+		    _blktf_fw($fh, $startpos, $pos, $offset);
+		    $self->[STARTPOS] += $offset;
+		} else {
+		    seek($fh, $startpos+$pos, SEEK_SET);
+		    print $fh $replace;
+		    my $start = $startpos+$pos+$size;
+		    _blktf_bw($fh, $startpos+$pos+$size, $len-$pos-$size, $offset);
+		    truncate($fh, $startpos+$newlen);
+		}
+	    } else {
+		my $offset = $rsize-$size;
+		my ($data, $pos2);
+
+		if ($startpos >= $offset) {
+		    _blktf_bw($fh, $startpos, $pos, $offset);
+		    seek($fh, $startpos+$pos-$offset, SEEK_SET);
+		    print $fh $replace;
+		    $self->[STARTPOS] -= $offset;
+		} else {
+		    _blktf_fw($fh, $startpos+$pos+$size, $len-$pos-$size, $offset);
+		    seek($fh, $startpos+$pos, SEEK_SET);
+		    print $fh $replace;
+		}
+	    }
 	}
-	$self->_set_fingerprint;
 	return $data;
     } else {
 	return defined $replace ? 
-	    substr($$self, $pos, $size, $replace) :
-	    substr($$self, $pos, $size);
+	    substr($self->[BUFFER], $pos, $size, $replace) :
+	    substr($self->[BUFFER], $pos, $size);
     }
+}
+
+sub _blktf_fw {
+    my ($fh, $start, $size, $offset) = @_;
+    my ($pos2, $data);
+
+    for ($pos2 = $start + $size-1024; $pos2 > $start; $pos2-=1024) {
+	seek($fh, $pos2, SEEK_SET);
+	read($fh, $data, 1024);
+	seek($fh, $pos2+$offset, SEEK_SET);
+	print $fh $data;
+    }
+    seek($fh, $start, SEEK_SET);
+    read($fh, $data, $pos2 - $start+1024);
+    seek($fh, $start+$offset, SEEK_SET);
+    print $fh $data;
+}
+
+sub _blktf_bw {
+    my ($fh, $start, $size, $offset) = @_;
+    my ($pos2, $data);
+
+    for($pos2 = $start; $pos2 < $start+$size-1024; $pos2+=1024) {
+	seek($fh, $pos2, SEEK_SET);
+	read($fh, $data, 1024);
+	seek($fh, $pos2-$offset, SEEK_SET);
+	print $fh $data;
+    }
+    seek($fh, $pos2, SEEK_SET);
+    read($fh, $data, $start+$size-$pos2);
+    seek($fh, $pos2-$offset, SEEK_SET);
+    print $fh $data;
 }
 
 
 sub clone {
     my ($self, $stream)=@_;
-    my $size = $self->Length;
+    my $size = $self->length;
     my $pos = 0;
     my $new = $self->new;
 
@@ -181,74 +211,137 @@ sub value {
 
 sub length {
     my $self = shift;
-    my $fn = $self->is_saved;
+    my $fn = $self->[FILENAME];
+    my $fh = $self->[FILEHANDLE];
 
-    return $fn ? ((-s $fn) - $$self->[STARTPOS]) : length($$self);
+    if ($fh) {
+	seek $fh, 0, SEEK_END;
+	return tell($fh)- $self->[STARTPOS];
+    } elsif ($fn) {
+	return (-s $fn) - $self->[STARTPOS];
+    } else {
+	return length($self->[BUFFER]);
+    }
 }
 
 sub defined {
-    defined $ {$_[0]};
+    defined shift->[BUFFER];
 }
 
 sub _open {
     my ($self, $mode) = @_;
-    my $fn = $$self->[FILENAME];
+    my ($fh, $fn);
 
-    croak "TemporaryBag object seems to be collapsed " if (-e $fn and !-f $fn) or $fn!~/TempBag[A-Z0-9]+$/;
-
-    chmod 0600, $fn if -e $fn;
-    my $fp_check = $self->_check_fingerprint;
-    my $fh = IO::File->new($fn, $mode, 0600);
-    binmode $fh;
-
-    croak "TemporaryBag object seems to be collapsed " unless defined $fh;
-    if (defined $$self->[FINGERPRINT]) {
-	croak "TemporaryBag object seems to be collapsed " unless $fp_check;
-    } else {
-	$self->_set_fingerprint;
+    if (defined ($fh = $self->[FILEHANDLE])) {
+	my $recent = $self->[RECENTNESS];
+	return $fh if $recent == 1;
+	$self->[RECENTNESS] = 0;
+	for my $obj (grep {$_->[RECENTNESS] <= $recent} @OpenFiles) {
+	    $obj->[RECENTNESS]++;
+	}
+	return $fh;
     }
+    if (defined ($fn = $self->[FILENAME])) {
+	croak "TemporaryBag object seems to be collapsed " if (!-e $fn) or (!-f _);
+	sysopen($fh, $fn, O_RDWR) or croak "TemporaryBag object seems to be collapsed OP";
+	croak "TemporaryBag object seems to be collapsed " if (-l $fn);
+	binmode $fh;
+	$self->[FILEHANDLE] = $fh;
+	$self->_check_fingerprint or croak "TemporaryBag object seems to be collapsed CH";
+    } else {
+	($fh, $fn) = mkstemp("$TempPath/TempBagXXXXX");
+	$self->[STARTPOS] = 0;
+	croak "TemporaryBag object seems to be collapsed CR" unless defined $fh;
+	binmode $fh;
+	$self->[FILEHANDLE] = $fh;
+	$self->[FILENAME] = $fn;
+    }
+
+    for my $obj (@OpenFiles) {
+	++$obj->[RECENTNESS];
+    }
+    
+    if (@OpenFiles >= $MaxOpen) {
+	for my $obj (@OpenFiles) {
+	    if ($obj->[RECENTNESS] > $MaxOpen) {
+		$obj->_close;
+		last;
+	    }
+	}
+    }
+
+    $self->[RECENTNESS] = 1;
+    push @OpenFiles, $self;
     return $fh;
 }
 
-sub is_saved {
+sub _close {
     my $self = shift;
+    my $recent = $self->[RECENTNESS];
+    my $fh = $self->[FILEHANDLE];
+    my $i;
 
-    return ref($$self) ? $$self->[FILENAME] : undef;
+    for ($i = 0; $i < @OpenFiles; $i++) {
+	last if $self eq $OpenFiles[$i];
+    }
+    for (; $i < $#OpenFiles; $i++) {
+	$OpenFiles[$i] = $OpenFiles[$i+1];
+    }
+    --$#OpenFiles;
+    for my $obj (grep {$_->[RECENTNESS] > $recent} @OpenFiles) {
+	--$obj->[RECENTNESS];
+    }
+    $self->_set_fingerprint;
+    undef $self->[FILEHANDLE];
+    close $fh or croak "TemporaryBag object seems to be collapsed CL";
+}
+
+
+sub is_saved {
+    return shift->[FILENAME];
 }
 
 sub _set_fingerprint {
     my $self = shift;
+    my $fingerprint;
+    my $fh =  $self->[FILEHANDLE];
+    seek $fh, 0, SEEK_END;
+    my $range = tell($fh) - $self->[STARTPOS] - 1024;
 
-    return unless ref($$self);
-
-    chmod 0400, $$self->[FILENAME];
-    $$self->[FINGERPRINT] = -s $$self->[FILENAME];
-    $$self->[FINGERPRINT] .= ':'.(-M _ or '');
+    for (1..3) {
+	my $r = int(rand($range))+1024;
+	my $data;
+	seek $fh, -$r, SEEK_END;
+	read($fh, $data, 1024);
+	$fingerprint .= "[$r]".unpack('%32C*',$data);
+    }
+    $self->[FINGERPRINT] = $fingerprint;
 }
 
 sub _check_fingerprint {
     my $self = shift;
+    my $fh =  $self->[FILEHANDLE];
+    my $fingerprint = $self->[FINGERPRINT];
+    my $flag = 1;
 
-    return 1 unless ref($$self);
+    while($fingerprint=~/\[([^]]+)\]([^[]+)/g) {
+	my $pos = $1;
+	my $sum = $2;
+	my $data;
 
-    my $fp =  -s $$self->[FILENAME];
-    $fp .= ':'. (-M _ or '');
-    return (defined $$self->[FINGERPRINT] and $$self->[FINGERPRINT] eq $fp);
+	seek $fh, -$pos, SEEK_END;
+	read($fh, $data, 1024);
+	$flag &&= (unpack('%32C*',$data) == $sum);
+    }
+    return $flag;
 }
 
-sub _new_filename {
-    my $fn;
 
-    do {
-	$fn = join('', map {('A'..'Z', '0'..'9')[int(rand(36))]} (0..7));
-	$fn = "$TempPath/TempBag$fn";
-    } while $TempFiles{$fn} or -e $fn;
-    $TempFiles{$fn}++;
-    $fn;
-}
 
 sub DESTROY {
-    shift->clear;
+    my $self = shift;
+    close $self->[FILEHANDLE] if $self->[FILEHANDLE];
+    unlink $self->[FILENAME];
 }
 
 1;
@@ -334,6 +427,11 @@ Default is 10.
 
 The directory path where temporary files are saved.
 Default is I<$ENV{TEMP} || $ENV{TMP} || './'>.
+
+=item $data::TemporaryBag::MaxOpen
+
+The maximum number of the opened temporary files.
+Default is 10.
 
 =back
 

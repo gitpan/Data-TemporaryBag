@@ -4,5 +4,5 @@ use ExtUtils::MakeMaker;
 WriteMakefile(
     'NAME'		=> 'Data::TemporaryBag',
     'VERSION_FROM'	=> 'TemporaryBag.pm', # finds $VERSION
-    'PREREQ_PM'		=> {}, # e.g., Module::Name => 1.1
+    'PREREQ_PM'		=> {File::Temp => 0.12, }, # e.g., Module::Name => 1.1
 );
