@@ -4,7 +4,7 @@ use strict;
 
 use Fcntl qw/:DEFAULT :seek/;
 use Carp;
-use File::Temp ':mktemp';
+use File::Temp 'tempfile';
 
 use overload '""' => \&value, '.=' => \&add, '=' => \&clone, fallback => 1;
 use constant BUFFER      => 0;
@@ -17,10 +17,11 @@ use constant LENGTH      => 5;
 
 our ($VERSION, $Threshold, $TempPath, $MaxOpen);
 
-$VERSION = '0.08';
+$VERSION = '0.09';
 
 $Threshold = 10; # KB
-$TempPath  = $::ENV{'TEMP'}||$::ENV{'TMP'}||'.';
+#$TempPath  = $::ENV{'TEMP'}||$::ENV{'TMP'}||'.';
+$TempPath = '';
 $MaxOpen = 10;
 
 my %OpenFiles;
@@ -274,7 +275,7 @@ sub _open {
 	$self->[FILEHANDLE] = $fh;
 	$self->_check_fingerprint or croak "TemporaryBag object seems to be collapsed CH";
     } else {
-	($fh, $fn) = mkstemp("$TempPath/TempBagXXXXX");
+	($fh, $fn) = tempfile();
 	$self->[STARTPOS] = 0;
 	croak "TemporaryBag object seems to be collapsed CR" unless defined $fh;
 	binmode $fh;
@@ -449,11 +450,6 @@ Returns the file name if I<$bag> is saved in a temporary file.
 
 The threshold of the data size in kilobytes whether saved into file or not.
 Default is 10.
-
-=item $Data::TemporaryBag::TempPath
-
-The directory path where temporary files are saved.
-Default is I<$ENV{TEMP} || $ENV{TMP} || './'>.
 
 =item $data::TemporaryBag::MaxOpen
 

@@ -1,7 +1,11 @@
 Revision history for Perl extension Data::TemporaryBag.
 
+0.09 Wed Jan 25 16:13:33 2006
+	- Changed to create temporary files in tmpdir(). $TempPath is obsolete now.
+
 0.08 Thu Jan 29 00:15:00 2004
 	- Segmentation fault occurred under a certain condition. Fixed.
+						(Thanks to David K. Watson)
 
 0.07 Mon Dec 15 22:45:00 2003
 	- Changed an implementation of length method.
